@@ -10,11 +10,9 @@
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<div id="flash"></div>
 <main>
   <header>
     <h1>👂 みみアラート</h1>
-    <p class="sub">イヤホン中でも、周りの音や呼びかけを知らせます</p>
   </header>
 
   <section class="card status-card">
@@ -22,13 +20,11 @@
       <div id="status" class="status idle">停止中</div>
       <button id="toggle" class="primary">聞き取り開始</button>
     </div>
-    <div class="meter"><div id="meterBar"></div><div id="floorMark"></div></div>
-    <div class="meter-label"><span id="dbNow">-- dB</span><span id="topClass">—</span></div>
   </section>
 
   <section class="card">
     <h2>🗣 聞き取った言葉</h2>
-    <div id="interim" class="interim">（話し声があるとここに表示されます）</div>
+    <div id="interim" class="interim"></div>
     <ul id="transcripts" class="log"></ul>
   </section>
 
@@ -37,36 +33,8 @@
     <ul id="events" class="log"></ul>
   </section>
 
-  <details class="card" id="settings">
-    <summary>⚙️ 設定</summary>
-
-    <h3>反応する音</h3>
-    <div id="groups" class="groups"></div>
-
-    <h3>呼びかけキーワード（カンマ区切り）</h3>
-    <p class="hint">自分の名前やあだ名を入れておくと、呼ばれたときに強めのアラートが鳴ります。</p>
-    <input id="keywords" type="text">
-
-    <h3>感度</h3>
-    <label class="range">音の分類のしきい値 <span id="scoreVal"></span>
-      <input id="score" type="range" min="0.1" max="0.8" step="0.05"></label>
-    <label class="range">「大きな音」= 周囲より +<span id="loudVal"></span> dB
-      <input id="loud" type="range" min="8" max="40" step="1"></label>
-
-    <h3>アラート</h3>
-    <label class="range">アラート音量 <span id="volVal"></span>
-      <input id="vol" type="range" min="0" max="1" step="0.05"></label>
-    <label class="check"><input id="useNotify" type="checkbox"> デスクトップ通知も出す</label>
-    <label class="check"><input id="useSpeech" type="checkbox"> 話し声を文字起こしする</label>
-    <div class="btns">
-      <button id="testStrong">強アラートを試す</button>
-      <button id="testSoft">弱アラートを試す</button>
-    </div>
-  </details>
-
   <footer>
-    <p>音声はブラウザ内で分類します（YAMNet）。文字起こしはブラウザの音声認識機能を使うため、Chromeでは音声がGoogleのサーバーに送られます。</p>
-    <p>音楽はスピーカーではなくイヤホンで聴き、このタブは開いたままにしてください。</p>
+    <p>文字起こしはブラウザの音声認識を使うため、Chromeでは音声がGoogleのサーバーに送られます。初回は音声モデル（約200MB）のダウンロードに時間がかかります。</p>
   </footer>
 </main>
 <script type="module" src="app.js"></script>
