@@ -66,6 +66,21 @@ function addLog(listId, text, cls = "") {
 }
 for (const id of ["events", "transcripts"]) $(id).innerHTML = `<li class="empty">まだありません</li>`;
 
+// ---------- 音量 ----------
+const volume = { chime: 0.6, replay: 1 };
+try { Object.assign(volume, JSON.parse(localStorage.getItem("mimi-alert-volume") || "{}")); } catch {}
+for (const key of ["chime", "replay"]) {
+  const input = $(key + "Vol"), out = $(key + "VolVal");
+  const show = () => { out.textContent = Math.round(volume[key] * 100) + "%"; };
+  input.value = volume[key];
+  show();
+  input.oninput = () => {
+    volume[key] = +input.value;
+    show();
+    try { localStorage.setItem("mimi-alert-volume", JSON.stringify(volume)); } catch {}
+  };
+}
+
 // ---------- アラート音 + 録音した音の再生 ----------
 let ctx = null;
 const getCtx = () => (ctx ??= new AudioContext());
@@ -78,7 +93,7 @@ function chime() {
     const o = c.createOscillator(), g = c.createGain();
     o.frequency.value = f;
     g.gain.setValueAtTime(0, t);
-    g.gain.linearRampToValueAtTime(0.6, t + 0.01);
+    g.gain.linearRampToValueAtTime(volume.chime, t + 0.01);
     g.gain.exponentialRampToValueAtTime(0.001, t + 0.3);
     o.connect(g).connect(c.destination);
     o.start(t);
@@ -97,7 +112,7 @@ function playClip(clip, at) {
   buf.copyToChannel(clip, 0);
   const src = c.createBufferSource(), g = c.createGain();
   src.buffer = buf;
-  g.gain.value = Math.min(0.8 / (peak || 1), 20);
+  g.gain.value = Math.min(0.8 / (peak || 1), 20) * volume.replay;
   src.connect(g).connect(c.destination);
   src.start(at);
   return at + buf.duration;
