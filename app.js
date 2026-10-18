@@ -7,9 +7,11 @@ const YAMNET_MODEL = "https://storage.googleapis.com/mediapipe-models/audio_clas
 // 2段目：AST（高精度）で候補の音を再判定して確定する
 const AST_MODEL = "Xenova/ast-finetuned-audioset-10-10-0.4593";
 
+const HOP_SEC = 0.15;         // YAMNet を回す間隔
 const CANDIDATE_SCORE = 0.15; // YAMNet：取りこぼさないよう低め
-const PRE_SEC = 2.5;          // 候補の前に遡って録っておく秒数
-const POST_SEC = 1.5;         // 候補の後に録る秒数
+const INSTANT_SCORE = 0.6;    // YAMNet がここまで自信があれば AST を待たずに鳴らす
+const PRE_SEC = 1.5;          // 再生時、音が始まる前に遡る秒数
+const MAX_CLIP_SEC = 5;       // 再生する最大の長さ
 
 // AudioSet のクラス名 → 知らせる音の種類
 const GROUPS = [
@@ -191,8 +193,8 @@ async function astScores(clip) {
 // ---------- マイク ----------
 let stream = null, running = false, nodes = [];
 let sampleRate = 48000, ring, ringPos = 0, sinceClassify = 0;
-let pending = null;   // 再判定待ちの候補
-let busyUntil = 0;    // 再判定・再生中は新しい候補を拾わない
+let totalSamples = 0;
+let busy = false;     // 再判定・再生中は新しい候補を拾わない
 const lastFired = new Map();
 
 const WORKLET = `
@@ -231,8 +233,9 @@ async function start() {
     }
 
     sampleRate = c.sampleRate;
-    ring = new Float32Array(Math.round(sampleRate * (PRE_SEC + POST_SEC + 1)));
-    ringPos = 0; sinceClassify = 0; pending = null; busyUntil = 0;
+    ring = new Float32Array(Math.round(sampleRate * (MAX_CLIP_SEC + 1)));
+    ringPos = 0; totalSamples = 0; sinceClassify = 0; busy = false;
+    await astScores(new Float32Array(sampleRate)); // 初回推論は遅いので先に済ませておく
 
     const url = URL.createObjectURL(new Blob([WORKLET], { type: "application/javascript" }));
     await c.audioWorklet.addModule(url).catch(() => {}); // 2回目以降は登録済み
@@ -265,7 +268,6 @@ function stop() {
   nodes = [];
   stream?.getTracks().forEach((t) => t.stop());
   stream = null;
-  pending = null;
   setStatus("停止中", "idle");
   const btn = $("toggle");
   btn.textContent = "聞き取り開始";
@@ -285,59 +287,65 @@ function onChunk(chunk) {
     ring[ringPos] = chunk[i];
     ringPos = (ringPos + 1) % ring.length;
   }
-
-  if (pending) {
-    pending.remaining -= chunk.length;
-    if (pending.remaining <= 0) {
-      const clip = lastSamples(Math.round(sampleRate * (PRE_SEC + POST_SEC)));
-      pending = null;
-      verify(clip);
-    }
-    return;
-  }
-
+  totalSamples += chunk.length;
   sinceClassify += chunk.length;
-  if (sinceClassify >= sampleRate * 0.25 && performance.now() > busyUntil) {
+  if (sinceClassify >= sampleRate * HOP_SEC && !busy) {
     sinceClassify = 0;
     detectCandidate();
   }
 }
 
-function detectCandidate() {
-  let results;
-  try { results = yamnet.classify(lastSamples(Math.round(sampleRate * 0.975)), sampleRate); } catch (e) { console.error(e); return; }
-  const cats = results?.[0]?.classifications?.[0]?.categories ?? [];
+// 種類ごとにクールダウン中でなく、しきい値を超えた中で一番スコアの高いもの
+function pickBest(entries, threshold) {
   const now = performance.now();
-  const hit = cats.some((cat) => {
-    const g = classToGroup.get(cat.categoryName);
-    return g && cat.score >= CANDIDATE_SCORE && now - (lastFired.get(g) ?? -1e9) > g.cooldown * 1000;
-  });
-  if (hit) pending = { remaining: Math.round(sampleRate * POST_SEC) };
+  let best = null;
+  for (const [name, score] of entries) {
+    const g = classToGroup.get(name);
+    if (!g || score < threshold(g)) continue;
+    if (now - (lastFired.get(g) ?? -1e9) < g.cooldown * 1000) continue;
+    if (!best || score > best.score) best = { g, name, score };
+  }
+  return best;
 }
 
-async function verify(clip) {
-  busyUntil = Infinity;
+function detectCandidate() {
+  const win = Math.round(sampleRate * 0.975);
+  let results;
+  try { results = yamnet.classify(lastSamples(win), sampleRate); } catch (e) { console.error(e); return; }
+  const cats = results?.[0]?.classifications?.[0]?.categories ?? [];
+  const best = pickBest(cats.map((c) => [c.categoryName, c.score]), () => CANDIDATE_SCORE);
+  if (!best) return;
+  const mark = totalSamples - win; // 音が始まったあたり
+  if (best.score >= INSTANT_SCORE) return fire(best, mark); // 確実なものは再判定せず即鳴らす
+  busy = true;
+  verify(lastSamples(Math.round(sampleRate * PRE_SEC) + win), mark);
+}
+
+async function verify(clip, mark) {
   try {
-    const scores = await astScores(clip);
-    const now = performance.now();
-    // 確定した種類のうち一番スコアの高いもの
-    let best = null;
-    for (const [name, score] of scores) {
-      const g = classToGroup.get(name);
-      if (!g || score < g.confirm) continue;
-      if (now - (lastFired.get(g) ?? -1e9) < g.cooldown * 1000) continue;
-      if (!best || score > best.score) best = { g, name, score };
-    }
-    if (!best || !running) { busyUntil = 0; return; }
-    lastFired.set(best.g, now);
-    addLog("events", `${ja(best.name)}（${best.g.label}）`, "alert");
-    const end = playClip(clip, chime());
-    // 再生した音を自分で拾わないよう、再生が終わるまで候補探しを止める
-    busyUntil = performance.now() + (end - getCtx().currentTime) * 1000 + 500;
+    const best = pickBest(await astScores(clip), (g) => g.confirm);
+    if (best && running) return fire(best, mark);
   } catch (e) {
     console.error(e);
-    busyUntil = 0;
   }
+  busy = false;
+}
+
+// アラート音を鳴らし、続けて「音が始まる少し前〜今」までの音を再生する
+function fire(best, mark) {
+  busy = true;
+  lastFired.set(best.g, performance.now());
+  addLog("events", `${ja(best.name)}（${best.g.label}）`, "alert");
+  const c = getCtx();
+  const chimeEnd = chime();
+  setTimeout(() => {
+    if (!running) { busy = false; return; }
+    const from = mark - Math.round(sampleRate * PRE_SEC);
+    const n = Math.min(totalSamples - from, Math.round(sampleRate * MAX_CLIP_SEC), ring.length);
+    const end = playClip(lastSamples(n), c.currentTime);
+    // 再生した音を自分で拾わないよう、再生が終わるまで候補探しを止める
+    setTimeout(() => { busy = false; }, (end - c.currentTime) * 1000 + 500);
+  }, Math.max(0, (chimeEnd - c.currentTime) * 1000));
 }
 
 $("toggle").onclick = () => (running ? stop() : start());
