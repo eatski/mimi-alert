@@ -1,5 +1,6 @@
 import { AudioClassifier, FilesetResolver } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-audio@0.10.14/audio_bundle.mjs";
 import { AutoProcessor, AutoModelForAudioClassification } from "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.5.1";
+import { denoise } from "./denoise.js";
 
 // 1段目：YAMNet（軽量）で常時監視して「候補」を拾う
 const YAMNET_WASM = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-audio@0.10.14/wasm";
@@ -103,9 +104,10 @@ function chime() {
   return t + 0.35;
 }
 
-// 小さい音でも聞こえるようにピークを揃えて再生。再生が終わる時刻を返す
-function playClip(clip, at) {
+// ノイズを除去し、小さい音でも聞こえるようにピークを揃えて再生。再生が終わる時刻を返す
+function playClip(raw, at) {
   const c = getCtx();
+  const clip = denoise(raw);
   let peak = 0;
   for (const v of clip) peak = Math.max(peak, Math.abs(v));
   const buf = c.createBuffer(1, clip.length, sampleRate);
